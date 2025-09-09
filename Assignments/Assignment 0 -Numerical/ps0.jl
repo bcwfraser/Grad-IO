@@ -49,7 +49,7 @@ using LinearAlgebra, Printf
     stationary_dist_via_eig(P; atol=1e-10)
 
 Compute the stationary distribution π for a row-stochastic transition matrix P
-by extracting the left eigenvector associated with eigenvalue 1 and normalizing.
+by extracting the left eigenvector associated with eigenvalue 1 and normalising.
 Returns a probability vector π (1×n).
 """
 function stationary_dist_via_eig(P::AbstractMatrix{<:Real}; atol=1e-10)
