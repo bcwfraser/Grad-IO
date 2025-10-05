@@ -3,6 +3,7 @@
 # Deadline: Friday, September 19th, 2025
 
 using CSV, DataFrames, Statistics, LinearAlgebra, Optim, Random, FastGaussQuadrature, Printf, Plots, ForwardDiff
+using Base.Threads: @threads, nthreads   # light parallelism across households
 using StatsFuns: logsumexp
 
 cd("Grad-IO/Assignments/Assignment 1-MLE and GMM")
@@ -22,6 +23,9 @@ tests = reshape(data.test_scores, J, H)
 sports = reshape(data.sports, J, H)
 dist  = reshape(data.distance,J, H)
 ymat  = reshape(data.y_ij,J, H)
+
+# Assert exactly one choice per household
+@assert all(sum(ymat[:, h]) == 1 for h in 1:H)
 
 # Chosen index per household (assumes exactly one 1 per household)
 
@@ -61,9 +65,7 @@ function unpack_plain(θ::AbstractVector, J::Int) #unpacks parameters
     β1 = θ[1]
     β2 = θ[2]
     α  = θ[3]              # utility uses −α* distance (α > 0 expected)
-    ξ  = zeros(J)
-    ξ[1:J-1] .= θ[4:end]
-    ξ[J] = -sum(ξ[1:J-1])
+    ξ  = zeros(J) # zero vector now ignored in this setup as collinear
     return β1, β2, α, ξ
 end
 
@@ -71,7 +73,7 @@ end
 function V_plain(β1::Float64, β2::Float64, α::Float64, ξ::Vector{Float64})
     # tests, sports: length-J (or J×1); dist: J×H; ξ: length-J
     # broadcasting adds the J-vectors across columns of the J×H matrix
-    return @. β1*tests + β2*sports - α*dist + ξ
+    return @. β1*tests + β2*sports - α*dist
 end
 
 # per-household log-likelihood contribution using the overflow trick from last pset
@@ -107,9 +109,6 @@ function grad_plain!(g::AbstractVector, θ::AbstractVector)
     g[2] = Ey_sports - E_sports
     g[3] = -(Ey_dist - E_dist)          # utility uses −α*dist
 
-    @inbounds for j in 1:J-1
-        g[3 + j] = sum(ymat[j, :]) - sum(P[j, :])
-    end
     return g
 end
 
@@ -117,7 +116,8 @@ end
 # Diversion ratio from school 1 to school 2
 function diversion_1to2(β1::Float64, β2::Float64, α::Float64, ξ::Vector{Float64})
     V = V_plain(β1, β2, α, ξ)
-    P = exp.(V)
+    Vcmax = maximum(V, dims=1)
+    P = exp.(V .- Vcmax)
     P ./= sum(P, dims=1)
     P1 = vec(P[1, :]); P2 = vec(P[2, :])
     vals = P2 ./ clamp.(1 .- P1, 1e-12, Inf)
@@ -127,7 +127,8 @@ end
 # Average own elasticity of chosen school wrt distance
 function avg_own_dist_elasticity(β1::Float64, β2::Float64, α::Float64, ξ::Vector{Float64})
     V = V_plain(β1, β2, α, ξ)
-    P = exp.(V)
+    Vcmax = maximum(V, dims=1)
+    P = exp.(V .- Vcmax)
     P ./= sum(P, dims=1)
     els = Float64[]
     @inbounds for h in 1:H
@@ -140,7 +141,7 @@ function avg_own_dist_elasticity(β1::Float64, β2::Float64, α::Float64, ξ::Ve
 end
 
 
-θ0 = vcat([0.0, 0.0, 0.1], zeros(J-1))  # [β1, β2, α, ξ_1..ξ_{J-1}]
+θ0 = vcat([0.0, 0.0, 0.1])  # [β1, β2, α]
 od = OnceDifferentiable(θ -> -ll_plain(θ),
                         (g, θ) -> (grad_plain!(g, θ); g .= -g),
                         θ0; inplace=true)
@@ -242,6 +243,8 @@ add_result!(raw"$\text{Only-}\xi$", nll=nll_xi)
 
 println(latex_table(results))
 
+
+
 # Q6. Now allow for parents to have different preferences for \text{test scores}_j so that \beta_{1i} \sim \mathcal{N}(\beta_1, \sigma_b). Write down the (simulated) market share and gradient expressions.
 
 # see Latex
@@ -253,21 +256,34 @@ println(latex_table(results))
 
 ### (a) Monte Carlo ###
 
-# I'll use forwarddiff for the (numerical) gradient rather than writing out the analytic expression for the gradient
-# over the draws alongside the standard normal shifter term (since this is MC anyway). I'm probably slowing down the 
-# execution of the code a bit but it's easier to write and read for this context like thsi
 
 #fixed base draws
 const R = 100
 Random.seed!(1999)
 const Z = randn(H, R)
 
+# Reusable buffers (shape fixed by J,H)
+const VBUF = zeros(Float64, J, H)
+const PBUF = similar(VBUF)
+const ST   = zeros(Float64, H)  # s_tests (expected tests by household)
+const SS   = zeros(Float64, H)  # s_sports (expected sports by household)
+const SD   = zeros(Float64, H)  # s_dist (expected distance by household)
+const CD   = zeros(Float64, H)  # chosen_dist (household-specific chosen distance)
+
+# Extra reusable accumulators (avoid per-call allocations)
+const PCBUF = zeros(Float64, H) # p_i accumulator: sum over draws/nodes of P_{j(i)}
+const S1BUF = zeros(Float64, H) # gradient accumulator for β1
+const S2BUF = zeros(Float64, H) # gradient accumulator for β2
+const SABUF = zeros(Float64, H) # gradient accumulator for α
+const SσBUF = zeros(Float64, H) # gradient accumulator for ℓσ
+
+
 # Collapse to J×1 vectors since tests/sports do not vary across households
 tests_j  = ndims(tests)  == 1 ? tests  : vec(tests[:, 1])
 sports_j = ndims(sports) == 1 ? sports : vec(sports[:, 1])
 @assert length(tests_j) == J && length(sports_j) == J
 
-# Unpack parameters: θ = [β1, β2, α, ℓσ, ξ_1:ξ_{J-1}]
+# Unpack parameters: θ = [β1, β2, α, ℓσ]
 # Enforce σ_b > 0 via σ_b = exp(ℓσ), and impose sum-to-zero constraint on ξ
 function unpack_mixed(θ::AbstractVector, J::Int)
     T  = eltype(θ)
@@ -276,16 +292,33 @@ function unpack_mixed(θ::AbstractVector, J::Int)
     α  = θ[3]
     σb = exp(θ[4])
     ξ  = zeros(T, J)
-    ξ[1:J-1] .= θ[5:end]
-    ξ[J] = -sum(ξ[1:J-1])
     return β1, β2, α, σb, ξ
 end
 
 # Column-wise softmax with stabilisation
+function softmax_cols!(P::AbstractMatrix, V::AbstractMatrix)
+    @inbounds for i in 1:size(V,2)
+        m = -Inf
+        @inbounds for j in 1:size(V,1)
+            v = V[j,i]; if v > m; m = v; end
+        end
+        s = 0.0
+        @inbounds for j in 1:size(V,1)
+            x = exp(V[j,i] - m)
+            P[j,i] = x
+            s += x
+        end
+        invs = 1.0 / s
+        @inbounds for j in 1:size(V,1)
+            P[j,i] *= invs
+        end
+    end
+    return P
+end
+
 function softmax_cols(V::AbstractMatrix)
-    Vc = V .- maximum(V, dims=1)
-    E  = exp.(Vc)
-    E ./ sum(E, dims=1)
+    P = similar(V)
+    return softmax_cols!(P, V)
 end
 
 # Simulated log-likelihood with R Monte Carlo draws
@@ -304,21 +337,154 @@ function ll_mixed_mc(θ::AbstractVector)
             pchosen[i] += P[chosen_idx[i], i] # accumulate prob of chosen option
         end
     end
-    return sum(log.(pchosen ./ T(R)))          # average over draws
+    return sum(log.(max.(pchosen ./ T(R), eps(T))))          # average over draws
 end
 
 ll_mixed_mc_neg(θ) = -ll_mixed_mc(θ) #as minimises
 
-# Gradient computed by automatic differentiation
-function grad_mixed_mc!(g, θ)
-    ForwardDiff.gradient!(g, ll_mixed_mc_neg, θ)
+# MC gradient (preallocated, BLAS for expectations, no per-i allocations)
+function grad_mixed_mc!(g::AbstractVector, θ::AbstractVector)
+    β1, β2, α, σb, _ = unpack_mixed(θ, J)
+    g .= 0.0
+
+    # gather chosen distances once
+    @inbounds for i in 1:H
+        CD[i] = dist[chosen_idx[i], i]
+    end
+
+    # per-household accumulators
+    # reuse global buffers to reduce allocations
+    PC = PCBUF; fill!(PC, 0.0)
+    Sβ1 = S1BUF; fill!(Sβ1, 0.0)
+    Sβ2 = S2BUF; fill!(Sβ2, 0.0)
+    Sα  = SABUF; fill!(Sα, 0.0)
+    Sσ  = SσBUF; fill!(Sσ, 0.0)
+
+    for r in 1:R
+        # V = β1i*tests + β2*sports - α*dist
+        @inbounds @simd for i in 1:H
+            β1i = β1 + σb * Z[i, r]
+            for j in 1:J
+                VBUF[j,i] = β1i * tests_j[j] + β2 * sports_j[j] - α * dist[j,i]
+            end
+        end
+
+        softmax_cols!(PBUF, VBUF)
+
+        # Expectations across alternatives for each i
+        mul!(ST, transpose(PBUF), tests_j)      # ST[i] = ∑_k P_{k,i} * tests_k
+        mul!(SS, transpose(PBUF), sports_j)     # SS[i] = ∑_k P_{k,i} * sports_k
+
+        # SD[i] = ∑_k P_{k,i} * d_{k,i}
+        Threads.@threads for i in 1:H        # parallel across households
+            s = 0.0
+            for j in 1:J
+                s += PBUF[j,i] * dist[j,i]
+            end
+            SD[i] = s
+        end
+
+        # Accumulate derivatives of the averaged probability p_i
+        Threads.@threads for i in 1:H        # parallel across households
+            ji = chosen_idx[i]
+            pc = PBUF[ji, i]                     # P_{j(i)}^{(r)}
+            PC[i] += pc
+            dtests   = tests_j[ji]  - ST[i]
+            dsports  = sports_j[ji] - SS[i]
+            ddist    = -(CD[i] - SD[i])
+            dσterm   = (σb * Z[i, r]) * dtests
+
+            Sβ1[i] += pc * dtests
+            Sβ2[i] += pc * dsports
+            Sα[i]  += pc * ddist
+            Sσ[i]  += pc * dσterm
+        end
+    end
+
+    # Chain rule for log of the average: ∂ℓ/∂θ = ∑_i (1 / p_i) * ∂p_i/∂θ, with p_i = PC[i]/R
+    @inbounds for i in 1:H
+        denom = max(PC[i], 1e-300)       # avoid divide-by-zero; (R cancels)
+        g[1] += Sβ1[i] / denom
+        g[2] += Sβ2[i] / denom
+        g[3] += Sα[i]  / denom
+        g[4] += Sσ[i]  / denom
+    end
+
+    g .*= -1.0   # Optim minimizes the negative log-likelihood
     return g
 end
 
-θ0_mixed = vcat([0.0, 0.0, 0.1, log(0.1)], zeros(J-1))  # [β1, β2, α, ℓσ, ξ_1:ξ_{J-1}]
+# Fused objective+gradient for MC MLE (avoids recomputing probabilities twice)
+function fg_mixed_mc!(g::AbstractVector, θ::AbstractVector)
+    β1, β2, α, σb, _ = unpack_mixed(θ, J)
+    g .= 0.0
+
+    # chosen distances
+    @inbounds for i in 1:H
+        CD[i] = dist[chosen_idx[i], i]
+    end
+
+    # zero accumulators
+    PC = PCBUF; fill!(PC, 0.0)
+    Sβ1 = S1BUF; fill!(Sβ1, 0.0)
+    Sβ2 = S2BUF; fill!(Sβ2, 0.0)
+    Sα  = SABUF; fill!(Sα, 0.0)
+    Sσ  = SσBUF; fill!(Sσ, 0.0)
+
+    # accumulate over Monte Carlo draws (households in parallel where safe)
+    for r in 1:R
+        @inbounds @simd for i in 1:H
+            β1i = β1 + σb * Z[i, r]
+            for j in 1:J
+                VBUF[j,i] = β1i * tests_j[j] + β2 * sports_j[j] - α * dist[j,i]
+            end
+        end
+        softmax_cols!(PBUF, VBUF)
+        mul!(ST, transpose(PBUF), tests_j)
+        mul!(SS, transpose(PBUF), sports_j)
+
+        Threads.@threads for i in 1:H
+            s = 0.0
+            for j in 1:J
+                s += PBUF[j,i] * dist[j,i]
+            end
+            SD[i] = s
+        end
+
+        Threads.@threads for i in 1:H
+            ji = chosen_idx[i]
+            pc = PBUF[ji, i]
+            PC[i] += pc
+            dtests   = tests_j[ji]  - ST[i]
+            dsports  = sports_j[ji] - SS[i]
+            ddist    = -(CD[i] - SD[i])
+            dσterm   = (σb * Z[i, r]) * dtests
+            Sβ1[i] += pc * dtests
+            Sβ2[i] += pc * dsports
+            Sα[i]  += pc * ddist
+            Sσ[i]  += pc * dσterm
+        end
+    end
+
+    # gradient
+    ll = 0.0
+    @inbounds for i in 1:H
+        denom = max(PC[i], 1e-300)
+        g[1] += Sβ1[i] / denom
+        g[2] += Sβ2[i] / denom
+        g[3] += Sα[i]  / denom
+        g[4] += Sσ[i]  / denom
+        ll += log(max(PC[i] / R, 1e-300))
+    end
+    g .*= -1.0
+    return -ll
+end
 
 
-od_mc = OnceDifferentiable(ll_mixed_mc_neg, grad_mixed_mc!, θ0_mixed; inplace=true)
+θ0_mixed = vcat([0.0, 0.0, 0.1, log(2)])  # [β1, β2, α, ℓσ]
+
+
+od_mc = OnceDifferentiable(ll_mixed_mc_neg, grad_mixed_mc!, fg_mixed_mc!, θ0_mixed; inplace=true)  # fused value+grad speeds up
 res_mc = optimize(od_mc, θ0_mixed, LBFGS(), Optim.Options(; iterations=10_000))
 
 θ̂_mc    = Optim.minimizer(res_mc)
@@ -397,32 +563,150 @@ const wn_GH = w_GH ./ sqrt(pi)
 # Simulated log-likelihood using Gauss–Hermite quadrature
 function ll_mixed_gh(θ::AbstractVector)
     T = eltype(θ)
-    β1, β2, α, σb, ξ = unpack_mixed(θ, J)
+    β1, β2, α, σb, _ = unpack_mixed(θ, J)  # ignore ξ
     pchosen = zeros(T, H)
-    base = β2 .* sports_j .+ ξ# J-vector added to each column
 
     @inbounds for m in 1:M_GH
-        β1m = β1 .+ σb .* z_GH[m] # scalar at node m
-        V = (tests_j .* β1m) .+ base .- α .* dist # J×H via broadcasting
-        P = softmax_cols(V)
+        β1m = β1 + σb * z_GH[m]                  # scalar at node m
+        # V[j,i] = β1m*tests_j[j] + β2*sports_j[j] - α*dist[j,i]
+        V = @. β1m*tests_j + β2*sports_j - α*dist
+        P = softmax_cols(V)                      # J×H probabilities
         w = wn_GH[m]
-        for i in 1:H
+        @inbounds for i in 1:H
             pchosen[i] += w * P[chosen_idx[i], i]
         end
     end
-    return sum(log.(pchosen))
+    return sum(log.(max.(pchosen, eps(T))))
 end
 
 ll_mixed_gh_neg(θ) = -ll_mixed_gh(θ)
 
-function grad_mixed_gh!(g, θ)
-    ForwardDiff.gradient!(g, ll_mixed_gh_neg, θ)
-    g
+function grad_mixed_gh!(g::AbstractVector, θ::AbstractVector)
+    β1, β2, α, σb, _ = unpack_mixed(θ, J)  # ignore ξ
+    g .= 0.0
+
+    # per-household accumulators
+    PC = zeros(Float64, H)   # p_i = ∑_m w_m * P_{j(i)}(node m)
+    Sβ1 = zeros(Float64, H)  # ∑_m w_m * P_{j(i)} * (tests_{j(i)} - E_P[tests])
+    Sβ2 = zeros(Float64, H)  # ∑_m w_m * P_{j(i)} * (sports_{j(i)} - E_P[sports])
+    Sα  = zeros(Float64, H)  # ∑_m w_m * P_{j(i)} * (-(d_{j(i),i} - E_P[d]))
+    Sσ  = zeros(Float64, H)  # ∑_m w_m * P_{j(i)} * (z_m * (tests_{j(i)} - E_P[tests]))
+
+    s_tests  = zeros(Float64, H)   # E_P[tests]_i at each node
+    s_sports = zeros(Float64, H)   # E_P[sports]_i at each node
+    s_dist   = zeros(Float64, H)   # E_P[distance]_i at each node
+
+    @inbounds for m in 1:M_GH
+        w  = wn_GH[m]
+        z  = z_GH[m]
+        β1m = β1 + σb * z
+
+        # V[j,i] = β1m*tests_j[j] + β2*sports_j[j] - α*dist[j,i]
+        V = @. β1m*tests_j + β2*sports_j - α*dist
+        P = softmax_cols(V)   # J×H
+
+        # E_P[tests]_i and E_P[sports]_i: (H×J)*(J) -> (H)
+        s_tests  .= vec(transpose(P) * tests_j)
+        s_sports .= vec(transpose(P) * sports_j)
+
+        # E_P[distance]_i
+        @inbounds for i in 1:H
+            s = 0.0
+            @inbounds for j in 1:J
+                s += P[j,i] * dist[j,i]
+            end
+            s_dist[i] = s
+        end
+
+        # accumulate ∂p_i/∂θ (note we multiply by P_{j(i)} here)
+        @inbounds for i in 1:H
+            ji = chosen_idx[i]
+            pc = P[ji, i]                       # P_{j(i)} at node m
+            PC[i] += w * pc
+            dtests   = tests_j[ji]  - s_tests[i]
+            dsports  = sports_j[ji] - s_sports[i]
+            ddist    = -(dist[ji, i] - s_dist[i])
+            dσterm   = (σb * z) * dtests
+
+            Sβ1[i] += w * pc * dtests
+            Sβ2[i] += w * pc * dsports
+            Sα[i]  += w * pc * ddist
+            Sσ[i]  += w * pc * dσterm
+        end
+    end
+
+    # Chain rule for log of simulated prob: ∂ℓ/∂θ = ∑_i (1 / p_i) * ∂p_i/∂θ
+    @inbounds for i in 1:H
+        wi = 1.0 / max(PC[i], 1e-300)
+        g[1] += wi * Sβ1[i]
+        g[2] += wi * Sβ2[i]
+        g[3] += wi * Sα[i]
+        g[4] += wi * Sσ[i]
+    end
+
+    g .*= -1.0   # Optim minimises the negative log-likelihood
+    return g
+end
+
+# Fused objective+gradient for GH MLE (compute value and gradient together)
+function fg_mixed_gh!(g::AbstractVector, θ::AbstractVector)
+    β1, β2, α, σb, _ = unpack_mixed(θ, J)
+    g .= 0.0
+
+    PC = PCBUF; fill!(PC, 0.0)
+    Sβ1 = S1BUF; fill!(Sβ1, 0.0)
+    Sβ2 = S2BUF; fill!(Sβ2, 0.0)
+    Sα  = SABUF; fill!(Sα, 0.0)
+    Sσ  = SσBUF; fill!(Sσ, 0.0)
+
+    @inbounds for m in 1:M_GH
+        w  = wn_GH[m]
+        z  = z_GH[m]
+        β1m = β1 + σb * z
+        V = @. β1m*tests_j + β2*sports_j - α*dist
+        P = softmax_cols(V)
+        ST .= vec(transpose(P) * tests_j)
+        SS .= vec(transpose(P) * sports_j)
+
+        Threads.@threads for i in 1:H
+            s = 0.0
+            for j in 1:J
+                s += P[j,i] * dist[j,i]
+            end
+            SD[i] = s
+        end
+
+        Threads.@threads for i in 1:H
+            ji = chosen_idx[i]
+            pc = P[ji, i]
+            PC[i] += w * pc
+            dtests   = tests_j[ji]  - ST[i]
+            dsports  = sports_j[ji] - SS[i]
+            ddist    = -(dist[ji, i] - SD[i])
+            dσterm   = (σb * z) * dtests
+            Sβ1[i] += w * pc * dtests
+            Sβ2[i] += w * pc * dsports
+            Sα[i]  += w * pc * ddist
+            Sσ[i]  += w * pc * dσterm
+        end
+    end
+
+    ll = 0.0
+    @inbounds for i in 1:H
+        wi = 1.0 / max(PC[i], 1e-300)
+        g[1] += wi * Sβ1[i]
+        g[2] += wi * Sβ2[i]
+        g[3] += wi * Sα[i]
+        g[4] += wi * Sσ[i]
+        ll += log(max(PC[i], 1e-300))
+    end
+    g .*= -1.0
+    return -ll
 end
 
 # Optimise
-θ0_gh = vcat([0.0, 0.0, 0.1, log(0.1)], zeros(J-1))
-od_gh = OnceDifferentiable(ll_mixed_gh_neg, grad_mixed_gh!, θ0_gh; inplace=true)
+θ0_gh = vcat([0.0, 0.0, 0.1, log(0.1)])
+od_gh = OnceDifferentiable(ll_mixed_gh_neg, grad_mixed_gh!, fg_mixed_gh!, θ0_gh; inplace=true)   # fused value+grad speeds up
 res_gh = optimize(od_gh, θ0_gh, LBFGS(), Optim.Options(; iterations=10_000))
 
 θ̂_gh    = Optim.minimizer(res_gh)
@@ -430,41 +714,39 @@ res_gh = optimize(od_gh, θ0_gh, LBFGS(), Optim.Options(; iterations=10_000))
 nll_gh   = -ll_mixed_gh(θ̂_gh)
 
 # Diversion ratio from school 1 to 2 (GH)
-function diversion_1to2_gh(β1, β2, α, σb, ξ)
-    base = β2 .* sports_j .+ ξ
+function diversion_1to2_gh(β1, β2, α, σb)
     acc = 0.0; cnt = 0
     @inbounds for m in 1:M_GH
-        β1m = β1 .+ σb .* z_GH[m]
-        V = (tests_j .* β1m) .+ base .- α .* dist
+        β1m = β1 + σb * z_GH[m]
+        V = @. β1m*tests_j + β2*sports_j - α*dist
         P = softmax_cols(V)
         vals = wn_GH[m] .* (P[2, :] ./ clamp.(1 .- P[1, :], 1e-12, Inf))
         acc += sum(vals); cnt += length(vals)
     end
-    acc / H
+    return acc / H
 end
 
 # Average own-distance elasticity of the chosen school (GH)
-function avg_own_dist_elasticity_gh(β1, β2, α, σb, ξ)
-    base = β2 .* sports_j .+ ξ
+function avg_own_dist_elasticity_gh(β1, β2, α, σb)
     acc = 0.0; cnt = 0
     @inbounds for m in 1:M_GH
-        β1m = β1 .+ σb .* z_GH[m]
-        V = (tests_j .* β1m) .+ base .- α .* dist
+        β1m = β1 + σb * z_GH[m]
+        V = @. β1m*tests_j + β2*sports_j - α*dist
         P = softmax_cols(V)
         w = wn_GH[m]
-        for i in 1:H
+        @inbounds for i in 1:H
             j = chosen_idx[i]
             pij = P[j, i]
-            deriv = -α * pij * (1 - pij)
+            deriv = -α * pij * (1 - pij)                    # ∂P_{ij}/∂d_{ij}
             acc += w * deriv * (dist[j, i] / max(pij, 1e-12))
             cnt += 1
         end
     end
-    acc / H
+    return acc / H
 end
 
-D12_gh  = diversion_1to2_gh(β1̂_gh, β2̂_gh, α̂_gh, σ̂b_gh, ξ̂_gh)
-elas_gh = avg_own_dist_elasticity_gh(β1̂_gh, β2̂_gh, α̂_gh, σ̂b_gh, ξ̂_gh)
+D12_gh  = diversion_1to2_gh(β1̂_gh, β2̂_gh, α̂_gh, σ̂b_gh)
+elas_gh = avg_own_dist_elasticity_gh(β1̂_gh, β2̂_gh, α̂_gh, σ̂b_gh)
 
 add_result!(raw"Mixed Logit (GH, M=20)",
     nll=nll_gh, β1=β1̂_gh, β2=β2̂_gh, α=α̂_gh, D12=D12_gh, elas=elas_gh)
@@ -487,13 +769,10 @@ println(latex_table(results))
 
 # Q10. Estimate the Parameters of the MSM estimator.
 
-# Given I've already written them out in the latex, I'll use the analytical expression for the Jacobian here rather than forwarddiff. I'll also
-# use GH rather than MC draws since the latter is computationally expensive.
-
 function msm_moments_and_jacobian(θ::AbstractVector)
     # Moments g(θ) and analytic Jacobian G(θ) under Gauss–Hermite averaging
     T = eltype(θ)
-    β1, β2, α, σb, ξ = unpack_mixed(θ, J)
+    β1, β2, α, σb, _ = unpack_mixed(θ, J)
 
     # Instruments z_{ij} = (tests_j, sports_j, d_{ij})
     Z_tests  = repeat(reshape(tests_j,  J, 1), 1, H)   # J×H
@@ -501,7 +780,7 @@ function msm_moments_and_jacobian(θ::AbstractVector)
     Z_dist   = dist                                    # J×H
 
     P̂ = zeros(T, J, H)
-    p = 4 + (J - 1)
+    p = 4
     G = zeros(T, 3, p)
 
     V  = zeros(T, J, H)
@@ -521,7 +800,7 @@ function msm_moments_and_jacobian(θ::AbstractVector)
     @inbounds for m in 1:M_GH
         w = wn_GH[m]
         β1m = β1 + σb * z_GH[m]
-        @. V = (β1m * tests_j + β2 * sports_j + ξ)
+        @. V = (β1m * tests_j + β2 * sports_j)
         V .-= α .* dist
         Pm .= softmax_cols(V)
         P̂ .+= w .* Pm
@@ -535,13 +814,6 @@ function msm_moments_and_jacobian(θ::AbstractVector)
         accumulate_param!(2, Xβ2, w)    # β2
         accumulate_param!(3, Xα,  w)    # α
         accumulate_param!(4, Xσ,  w)    # ℓσ
-
-        for r in 1:J-1                  # ξ_1..ξ_{J-1} with ∑ξ=0
-            Xξ = zeros(T, J, H)
-            @views Xξ[r, :] .= 1
-            @views Xξ[J, :] .-= 1
-            accumulate_param!(4 + r, Xξ, w)
-        end
     end
 
     resid = ymat .- P̂
@@ -552,8 +824,6 @@ function msm_moments_and_jacobian(θ::AbstractVector)
 
     return g, G
 end
-
-
 
 
 # MSM criterion Q(θ) = g(θ)' W g(θ); here W = I (one-step MSM)
@@ -571,29 +841,35 @@ function msm_gradient!(gvec, θ)
     gvec
 end
 
-θ0_msm = vcat([0.0, 0.0, 0.1, log(0.1)], zeros(J-1))
-od_msm = OnceDifferentiable(msm_value, msm_gradient!, θ0_msm; inplace=true)
+θ0_msm = vcat([0.0, 0.0, 0.1, log(2)])
+function msm_fg!(gvec, θ)
+    Q, grad = msm_objective_and_gradient(θ)    # compute both once
+    gvec .= grad
+    return Q
+end
+od_msm = OnceDifferentiable(msm_value, msm_gradient!, msm_fg!, θ0_msm; inplace=true)  # fused value+grad
 res_msm = optimize(od_msm, θ0_msm, LBFGS(), Optim.Options(; iterations=10_000))
 
 θ̂_msm = Optim.minimizer(res_msm)
-β1̂_msm, β2̂_msm, α̂_msm, σ̂b_msm, ξ̂_msm = unpack_mixed(θ̂_msm, J)
+β1̂_msm, β2̂_msm, α̂_msm, σ̂b_msm, _ = unpack_mixed(θ̂_msm, J)
 
-D12_msm  = diversion_1to2_gh(β1̂_msm, β2̂_msm, α̂_msm, σ̂b_msm, ξ̂_msm)
-elas_msm = avg_own_dist_elasticity_gh(β1̂_msm, β2̂_msm, α̂_msm, σ̂b_msm, ξ̂_msm)
+D12_msm  = diversion_1to2_gh(β1̂_msm, β2̂_msm, α̂_msm, σ̂b_msm)
+elas_msm = avg_own_dist_elasticity_gh(β1̂_msm, β2̂_msm, α̂_msm, σ̂b_msm)
 
 add_result!(raw"MSM (GH, M=20)",
     nll=NaN, β1=β1̂_msm, β2=β2̂_msm, α=α̂_msm, D12=D12_msm, elas=elas_msm)
 
 println(latex_table(results))
 
+
 # Q11. Bonus: Using your initial MSM estimates as a starting point, explain how to construct an ``efficient'' MSM estimator, and produce ``efficient'' estimates.
 
 
 # GH-averaged probabilities P̂_{ij}(θ) (J×H)
-function probs_gh(β1, β2, α, σb, ξ)
-    T = eltype(ξ)
+function probs_gh(β1, β2, α, σb)
+    T = eltype(dist)
     P̂ = zeros(T, J, H)
-    base = β2 .* sports_j .+ ξ
+    base = β2 .* sports_j
     @inbounds for m in 1:M_GH
         β1m = β1 + σb * z_GH[m]
         V = (tests_j .* β1m) .+ base .- α .* dist     # J×H
@@ -603,12 +879,13 @@ function probs_gh(β1, β2, α, σb, ξ)
     P̂
 end
 
+
 # Per-household moment vectors m_i(θ) (H×K) and their average g(θ) (K)
 # Instruments are (tests_j, sports_j, d_{ij}); K=3
 function household_moments(θ::AbstractVector)
     T = eltype(θ)
-    β1, β2, α, σb, ξ = unpack_mixed(θ, J)
-    P̂ = probs_gh(β1, β2, α, σb, ξ)
+    β1, β2, α, σb, _ = unpack_mixed(θ, J)
+    P̂ = probs_gh(β1, β2, α, σb)
     resid = ymat .- P̂                                # J×H
     M = zeros(T, H, 3)
     @inbounds for i in 1:H
@@ -619,6 +896,7 @@ function household_moments(θ::AbstractVector)
     g = vec(sum(M, dims=1)) ./ T(H)                   # length-3
     M, g
 end
+
 
 
 # Build optimal weight from initial MSM estimate
@@ -657,10 +935,11 @@ end
 # Run two-step (efficient) MSM from initial one-step MSM estimate θ̂_msm
 θ̂_eff, Ŵ, res_eff = efficient_msm(θ̂_msm)
 
-β1̂_eff, β2̂_eff, α̂_eff, σ̂b_eff, ξ̂_eff = unpack_mixed(θ̂_eff, J)
+β1̂_eff, β2̂_eff, α̂_eff, σ̂b_eff, _ = unpack_mixed(θ̂_eff, J)
 
-D12_eff  = diversion_1to2_gh(β1̂_eff, β2̂_eff, α̂_eff, σ̂b_eff, ξ̂_eff)
-elas_eff = avg_own_dist_elasticity_gh(β1̂_eff, β2̂_eff, α̂_eff, σ̂b_eff, ξ̂_eff)
+D12_eff  = diversion_1to2_gh(β1̂_eff, β2̂_eff, α̂_eff, σ̂b_eff)
+elas_eff = avg_own_dist_elasticity_gh(β1̂_eff, β2̂_eff, α̂_eff, σ̂b_eff)
+
 
 add_result!(raw"Efficient MSM (GH, M=20))",
     nll=NaN, β1=β1̂_eff, β2=β2̂_eff, α=α̂_eff, D12=D12_eff, elas=elas_eff)

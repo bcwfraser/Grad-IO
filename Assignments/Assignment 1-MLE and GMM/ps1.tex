@@ -47,9 +47,9 @@ Clearly, chosen schools tend to be closer.
 Q2. Write down the market share and log-likelihood for a plain logit model.
 \end{tcolorbox}
 
-Market share for a school $j$ comes from aggregating up the individual choice probabilities. The deterministic part of utility is:
+Market share for a school $j$ comes from aggregating up the individual choice probabilities. We don't observe school quality and the inclusion of a school fixed effect would make the school-level observables collinear. The observed part of utility is:
 \[
-V_{ij} := \beta_1 \,\text{tests}_j + \beta_2 \,\text{sports}_j - \alpha \, d_{ij} + \xi_j
+V_{ij} := \beta_1 \,\text{tests}_j + \beta_2 \,\text{sports}_j - \alpha \, d_{ij}
 \]
 The choice probability that household $i$ chooses school $j$ is
 \[
@@ -93,15 +93,11 @@ Let $x_{ij} = \big(\text{tests}_j,\ \text{sports}_j,\ -d_{ij}\big)$. Using the l
 \nabla_\theta \ell(\theta)
 =
 \left(
-\sum_{i=1}^H \sum_{j=1}^J x_{ij}\,(y_{ij}-P_{ij}),
-\;\;
-\sum_{i=1}^H (y_{i1}-P_{i1}),
-\ldots,
-\sum_{i=1}^H (y_{iJ}-P_{iJ})
-\right).
+\sum_{i=1}^H \sum_{j=1}^J x_{ij}\,(y_{ij}-P_{ij})
+\right)
 \]
 
-Where the first block is a 3 dim vector of the derivatives wrt $(\beta_1,\beta_2,\alpha)$, and the remaining $J$ entries give the derivatives with respect to $(\xi_1,\ldots,\xi_J)$.
+Which is a 3 dim vector of the derivatives wrt $(\beta_1,\beta_2,\alpha)$.
 
 Or written out component-wise:
 \[
@@ -115,13 +111,13 @@ Or written out component-wise:
 \frac{\partial \ell}{\partial \alpha}
 =\sum_{i=1}^H\sum_{j=1}^J (-d_{ij})\,(y_{ij}-P_{ij}),
 \qquad
-\frac{\partial \ell}{\partial \xi_j}
-=\sum_{i=1}^H (y_{ij}-P_{ij}), \quad j=1,\ldots,J.
 \]
 
 \begin{tcolorbox}
 Q4. Estimate the plain logit model by maximimum likelihood.
 \end{tcolorbox}
+
+As flagged in 2) above, this model cannot incorporate the school-specific effects $\xi$ becuase we lack any variation to identify the impacts of test scores and sports within school.
 
 \begin{table}[H]
 \centering
@@ -130,7 +126,7 @@ Q4. Estimate the plain logit model by maximimum likelihood.
 \toprule
 Model & NLL & $\beta_1$ & $\beta_2$ & $\alpha$ & $D_{12}$ & Avg. own dist. elas. \\
 \midrule
-Plain Logit & 12563.72 & -0.24 & 0.23 & 0.20 & 0.13 & -0.43 \\
+Plain Logit & 12982.80 & -3.44 & 0.52 & 0.20 & 0.15 & -0.43 \\
 \bottomrule
 \end{tabular}
 }
@@ -149,7 +145,7 @@ Q5. Estimate a restricted model with only $\xi_j$ parameters. Add that to your t
 \toprule
 Model & NLL & $\beta_1$ & $\beta_2$ & $\alpha$ & $D_{12}$ & Avg. own dist. elas. \\
 \midrule
-Plain Logit & 12563.72 & -0.24 & 0.23 & 0.20 & 0.13 & -0.43 \\\n$\text{Only-}\xi$ & 14260.39 & -- & -- & -- & -- & -- \\
+Plain Logit & 12982.80 & -3.44 & 0.52 & 0.20 & 0.15 & -0.43 \\\n$\text{Only-}\xi$ & 14260.39 & -- & -- & -- & -- & -- \\
 \bottomrule
 \end{tabular}
 }
@@ -164,15 +160,15 @@ Each household $i$ has a random coefficient $\beta_{1i}$ such that
 \[
 \beta_{1i} \sim \mathcal{N}(\beta_1,\sigma_b).
 \]
-The deterministic utility becomes
+The observable part of utility becomes
 \[
-V_{ij} = \beta_{1i}\,\text{tests}_j + \beta_2\,\text{sports}_j - \alpha\,d_{ij} + \xi_j.
+V_{ij} = \beta_{1i}\,\text{tests}_j + \beta_2\,\text{sports}_j - \alpha\,d_{ij}.
 \]
 
 For a given household $i$ and a given draw $r$ from the normal, the choice probability is
 \[
-P_{ij}^{(r)}(\theta) \;=\; \frac{\exp\!\left(\beta_{1i}^{(r)}\,\text{tests}_j + \beta_2\,\text{sports}_j - \alpha\,d_{ij} + \xi_j\right)}
-{\sum_{k=1}^J \exp\!\left(\beta_{1i}^{(r)}\,\text{tests}_k + \beta_2\,\text{sports}_k - \alpha\,d_{ik} + \xi_k\right)}.
+P_{ij}^{(r)}(\theta) \;=\; \frac{\exp\!\left(\beta_{1i}^{(r)}\,\text{tests}_j + \beta_2\,\text{sports}_j - \alpha\,d_{ij}\right)}
+{\sum_{k=1}^J \exp\!\left(\beta_{1i}^{(r)}\,\text{tests}_k + \beta_2\,\text{sports}_k - \alpha\,d_{ik}\right)}.
 \]
 
 We can obtain the simulated market share by averaging over $R$ draws for each household:
@@ -180,44 +176,61 @@ We can obtain the simulated market share by averaging over $R$ draws for each ho
 \tilde s_j(\theta) \;=\; \frac{1}{H}\sum_{i=1}^H \frac{1}{R} \sum_{r=1}^R P_{ij}^{(r)}(\theta).
 \]
 
-For the log-likelihood $\ell(\theta)=\sum_{i=1}^H\sum_{j=1}^J y_{ij}\log P_{ij}(\theta)$ with $P_{ij}$ replaced by its simulated counterpart, the (simulated) score components are obtained by averaging the per-draw contributions:
+For the log-likelihood
+\[
+\ell(\theta)=\sum_{i=1}^H\sum_{j=1}^J y_{ij}\log P_{ij}(\theta),
+\]
+with $P_{ij}$ replaced by its simulated counterpart, the (simulated) score components are
 \[
 \frac{\partial \ell}{\partial \beta_1}
-=\sum_{i=1}^H \frac{1}{R}\sum_{r=1}^R 
-\Big( \text{tests}_{j(i)} - \sum_{k=1}^J P_{ik}^{(r)}\,\text{tests}_k \Big),
+=\sum_{i=1}^H \frac{1}{p_i(\theta)}\cdot\frac{1}{R}\sum_{r=1}^R 
+P_{i\,j(i)}^{(r)}\Big( \text{tests}_{j(i)} - \sum_{k=1}^J P_{ik}^{(r)}\,\text{tests}_k \Big),
 \]
 \[
 \frac{\partial \ell}{\partial \beta_2}
-=\sum_{i=1}^H \frac{1}{R}\sum_{r=1}^R 
-\Big( \text{sports}_{j(i)} - \sum_{k=1}^J P_{ik}^{(r)}\,\text{sports}_k \Big),
+=\sum_{i=1}^H \frac{1}{p_i(\theta)}\cdot\frac{1}{R}\sum_{r=1}^R 
+P_{i\,j(i)}^{(r)}\Big( \text{sports}_{j(i)} - \sum_{k=1}^J P_{ik}^{(r)}\,\text{sports}_k \Big),
 \]
 \[
 \frac{\partial \ell}{\partial \alpha}
-=\sum_{i=1}^H \frac{1}{R}\sum_{r=1}^R 
-\Big( -d_{i\,j(i)} + \sum_{k=1}^J P_{ik}^{(r)}\,d_{ik} \Big),
+=\sum_{i=1}^H \frac{1}{p_i(\theta)}\cdot\frac{1}{R}\sum_{r=1}^R 
+P_{i\,j(i)}^{(r)}\Big( -d_{i\,j(i)} + \sum_{k=1}^J P_{ik}^{(r)}\,d_{ik} \Big),
 \]
+where 
 \[
-\frac{\partial \ell}{\partial \xi_j}
-=\sum_{i=1}^H \frac{1}{R}\sum_{r=1}^R \big( y_{ij} - P_{ij}^{(r)} \big), 
-\qquad j=1,\ldots,J.
+p_i(\theta) \;=\; \frac{1}{R}\sum_{r=1}^R P_{i\,j(i)}^{(r)}(\theta).
 \]
 
-There is also the additional parameter $\sigma_b$ governing the dispersion of of $\beta_{1i}$.
-
+There is also the additional parameter $\sigma_b$ governing the dispersion of $\beta_{1i}$:
 \[
 \frac{\partial \ell}{\partial \sigma_b}
-=\sum_{i=1}^H \frac{1}{R}\sum_{r=1}^R 
-z_{ir}\,\Big( \text{tests}_{j(i)} - \sum_{k=1}^J P_{ik}^{(r)}\,\text{tests}_k \Big),
+=\sum_{i=1}^H \frac{1}{p_i(\theta)}\cdot\frac{1}{R}\sum_{r=1}^R 
+P_{i\,j(i)}^{(r)}\,z_{ir}\Big( \text{tests}_{j(i)} - \sum_{k=1}^J P_{ik}^{(r)}\,\text{tests}_k \Big).
 \]
 
 Because $\beta_{1i}^{(r)} = \beta_1 + \sigma_b z_{ir}$, the chain rule gives 
-$\partial \beta_{1i}^{(r)} / \partial \sigma_b = z_{ir}$, which is why a factor $z_{ir}$ multiplies the same test-score score component as for $\beta_1$.
+\[
+\frac{\partial \beta_{1i}^{(r)}}{\partial \sigma_b} = z_{ir},
+\]
+which is why a factor $z_{ir}$ multiplies the same test-score score component as for $\beta_1$.
+
 
 
 
 \begin{tcolorbox}
 Q7. Estimate this expanded model via maximum likelihood: (a) Using 100 Monte Carlo Draws from an appropriately transformed standard normal. (b) Using a Gauss Hermite quadrature rule.
 \end{tcolorbox}
+
+I find that the dispersion of the random coefficient $\sigma_b$ collapses to 0 when we optimise, meaning we end up with qualitatively the same results as plain logit. I explored this by re-evaluating at the plain logit coeffs and the fit deteriorating (NLL moving further from 0) as the imposed dispersion grew. 
+
+\vspace{5mm}
+
+In other words, letting $\beta_1$ vary randomly doesn't allow us to explain  school choice any better. The mean test score in chosen schools in the sample is actually a little lower than the mean across all schools, and it doesn't seem like there is much household heterogeneity that positively values test scores for the solver to place probability mass behind.  
+
+\vspace{5mm}
+
+
+Perhaps scores aren't really observable to the parents in the same way that distance and sports are?
 
 \begin{table}[H]
 \centering
@@ -226,10 +239,13 @@ Q7. Estimate this expanded model via maximum likelihood: (a) Using 100 Monte Car
 \toprule
 Model & NLL & $\beta_1$ & $\beta_2$ & $\alpha$ & $D_{12}$ & Avg. own dist. elas. \\
 \midrule
-Plain Logit & 12563.72 & -0.24 & 0.23 & 0.20 & 0.13 & -0.43 \\\n$\text{Only-}\xi$ & 14260.39 & -- & -- & -- & -- & -- \\\n Expanded Logit (MC, R=100) & 12563.72 & -0.17 & 0.25 & 0.20 & 0.13 & -0.43 \\\n Expanded Logit (GH, M=20) & 12563.72 & -0.17 & 0.25 & 0.20 & 0.13 & -0.43 \\
+Plain Logit & 12982.80 & -3.44 & 0.52 & 0.20 & 0.15 & -0.43 \\\n$\text{Only-}\xi$ & 14260.39 & -- & -- & -- & -- & -- \\\nExpanded Logit (MC, R=100) & 12982.80 & -3.44 & 0.52 & 0.20 & 0.15 & -0.43 \\\nMixed Logit (GH, M=20) & 12982.80 & -3.44 & 0.52 & 0.20 & 0.15 & -0.43 \\
 \bottomrule
 \end{tabular}
 }
+\caption{Estimation results for logit models.}
+\end{table}
+
 \caption{Estimation results for logit models.}
 \end{table}
 
@@ -238,7 +254,7 @@ Plain Logit & 12563.72 & -0.24 & 0.23 & 0.20 & 0.13 & -0.43 \\\n$\text{Only-}\xi
 Q8. Read Chapter 10 in Train and write down the MSM estimator for the expanded model. What are your ``instruments''?
 \end{tcolorbox}
 
-The MSM estimator takes the residuals from the simulated model of choice probabilities and projects them onto a set of (exogenous) variables. Specifically, for each household $i$ and school $j$ we observe $y_{ij}\in\{0,1\}$, and we compute simulated probabilities $\hat P_{ij}(\theta)$ given parameters $\theta=(\beta_1,\beta_2,\alpha,\sigma_b,\xi)$.  
+The MSM estimator takes the residuals from the simulated model of choice probabilities and projects them onto a set of (exogenous) variables. Specifically, for each household $i$ and school $j$ we observe $y_{ij}\in\{0,1\}$, and we compute simulated probabilities $\hat P_{ij}(\theta)$ given parameters $\theta=(\beta_1,\beta_2,\alpha,\sigma_b)$.  
 
 \vspace{5mm}
 
@@ -267,8 +283,7 @@ where the norm reflects the weighting we put on different instruments.
 
 \medskip
 \noindent
-The instruments $z_{ij}$ are variables that shift the observed choices but are not correlated with the unobserved school quality terms $\xi_j$.  
-We might plausibly just use our observables to instrument themselves, given they are not part of $\xi_j$) and they correlate strongly with the residuals $(y_{ij}-\hat P_{ij}(\theta))$.
+The instruments $z_{ij}$ need to be variables that exogenosuly shift the observed choices. We might plausibly just use our observables to instrument themselves.
 
 \vspace{5mm}
 
@@ -322,8 +337,7 @@ In our model
 V^{(r)}_{ij}
 = \beta_{1i}^{(r)}\,\text{tests}_j
 + \beta_2\,\text{sports}_j
-- \alpha\,d_{ij}
-+ \xi_j,
+- \alpha\,d_{ij},
 \qquad
 \beta_{1i}^{(r)}=\beta_1+\sigma_b z_{ir}.
 \]
@@ -333,7 +347,6 @@ x^{(r)}_{ij,\beta_1}=\text{tests}_j,\qquad
 x^{(r)}_{ij,\sigma_b}=z_{ir}\,\text{tests}_j,\qquad
 x^{(r)}_{ij,\beta_2}=\text{sports}_j,\qquad
 x^{(r)}_{ij,\alpha}=-d_{ij},\qquad
-x^{(r)}_{ij,\xi_m}=\mathbb{1}\{j=m\}.
 \]
 
 Substituting these into the expression above gives the derivatives of the probabilities with respect to each parameter, which are then used in the Jacobian $G(\theta)$.
@@ -349,7 +362,7 @@ Q10. Estimate the Parameters of the MSM estimator.
 \toprule
 Model & NLL & $\beta_1$ & $\beta_2$ & $\alpha$ & $D_{12}$ & Avg. own dist. elas. \\
 \midrule
-Plain Logit & 12563.72 & -0.24 & 0.23 & 0.20 & 0.13 & -0.43 \\\n$\text{Only-}\xi$ & 14260.39 & -- & -- & -- & -- & -- \\\n Expanded Logit (MC, R=100) & 12563.72 & -0.17 & 0.25 & 0.20 & 0.13 & -0.43 \\\n Expanded Logit (GH, M=20) & 12563.72 & -0.17 & 0.25 & 0.20 & 0.13 & -0.43 \\\n MSM (GH, M=20) & -- & -0.13 & 0.24 & 0.20 & 0.16 & -0.43 \\
+Plain Logit & 12982.80 & -3.44 & 0.52 & 0.20 & 0.15 & -0.43 \\\n$\text{Only-}\xi$ & 14260.39 & -- & -- & -- & -- & -- \\\n MSM (GH, M=20) & -- & -3.48 & 0.53 & 0.20 & 0.15 & -0.43 \\
 \bottomrule
 \end{tabular}
 }
@@ -397,7 +410,7 @@ This re-estimation with the optimal weight matrix yields the efficient MSM estim
 \toprule
 Model & NLL & $\beta_1$ & $\beta_2$ & $\alpha$ & $D_{12}$ & Avg. own dist. elas. \\
 \midrule
-Plain Logit & 12563.72 & -0.24 & 0.23 & 0.20 & 0.13 & -0.43 \\\n$\text{Only-}\xi$ & 14260.39 & -- & -- & -- & -- & -- \\\n Expanded Logit (MC, R=100) & 12563.72 & -0.17 & 0.25 & 0.20 & 0.13 & -0.43 \\\n Expanded Logit (GH, M=20) & 12563.72 & -0.17 & 0.25 & 0.20 & 0.13 & -0.43 \\\n MSM (GH, M=20) & -- & -0.13 & 0.24 & 0.20 & 0.16 & -0.43 \\\n Efficient MSM (GH, M=20)) & -- & -0.13 & 0.24 & 0.20 & 0.16 & -0.43 \\
+Plain Logit & 12982.80 & -3.44 & 0.52 & 0.20 & 0.15 & -0.43 \\\n$\text{Only-}\xi$ & 14260.39 & -- & -- & -- & -- & -- \\\n MSM (GH, M=20) & -- & -3.48 & 0.53 & 0.20 & 0.15 & -0.43 \\\n Efficient MSM (GH, M=20)) & -- & -3.48 & 0.53 & 0.20 & 0.15 & -0.43 \\
 \bottomrule
 \end{tabular}
 }
