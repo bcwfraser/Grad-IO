@@ -225,7 +225,8 @@ is the moment generating function of \(\eta_{jl}\)
 
 \vspace{5mm}
 
-We have that $\eta_{jl}\sim \mathcal{N}(0,\sigma^2)$, so from the formula for the mgf of the normal:
+We have that $\eta_{jl} \sim \mathcal{N}(0,\sigma^2)$ independently across $(j,l)$, so from the formula for the mgf of the normal:
+
 \[
 \quad M_{\eta}(t)=\exp\!\left(\tfrac{1}{2}\sigma^2 t^2\right)
 \]
@@ -361,9 +362,9 @@ We assume that $\epsilon_{ij}$ is distributed GEV with some nesting parameter $\
 9) [Easy] Derive a simplified form of the nested logit choice probabilities and the expected (ex-ante) consumer surplus in dollars. [Just write them from Berry (1994)].
 \end{tcolorbox}
 
-Let $V_j=\delta_j-\alpha p_j$ and define
+Let $V_j=\delta_j-\alpha p_j$ and write the set of inside products as $\mathcal{J}$. Define
 \[
-D \;=\; \sum_{k \text{ (inside)}} \exp\!\left(\frac{V_k}{1-\sigma}\right).
+D \;=\; \sum_{k \in \mathcal{J}} \exp\!\left(\frac{V_k}{1-\sigma}\right).
 \]
 With all inside products in one nest and the outside good alone in the second nest, the nested logit probabilities are:
 \[
