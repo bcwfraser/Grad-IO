@@ -323,15 +323,22 @@ Xo = hcat(products.x, products.satellite, products.p_eq_ms)
 βsat_ols = β_ols[2]   # coefficient on satellite dummy (wired is baseline)
 α_ols    = β_ols[3]   # coefficient on price
 
-# 5)
-# 2SLS: instrument price with {x, w}; include all exogenous regressors in Z
-X  = hcat(products.x, products.satellite, products.p_eq_ms)
-Z  = hcat(products.x, products.satellite, products.w)
-PZ = Z * inv(Z'Z) * Z'
-β_iv = inv(X' * PZ * X) * (X' * PZ * y)
-β1_iv   = β_iv[1]      # coefficient on x
-βsat_iv = β_iv[2]      # coefficient on satellite dummy
-α_iv    = β_iv[3]      # coefficient on price
+# 5) 2SLS with price instrumented by w (x, satellite treated as exogenous)
+X1 = hcat(products.x, products.satellite)                 # exogenous regressors
+p  = products.p_eq_ms
+Z1 = hcat(products.x, products.satellite, products.w)     # first-stage regressors
+
+# first stage: p_hat = Proj_{[X1 w]}(p)
+p_hat = Z1 * (inv(Z1'Z1) * (Z1' * p))
+
+# second stage: y ~ X1 + p_hat
+X2 = hcat(X1, p_hat)
+β_iv = inv(X2'X2) * (X2' * y)
+
+β1_iv   = β_iv[1]
+βsat_iv = β_iv[2]
+α_iv    = β_iv[3]
+
 
 # Comparison table
 estimates = DataFrame(
@@ -367,12 +374,54 @@ end
 
 
 
-# 6) Nested logit 2SLS: y = β*x + α*p + σ_sat*ln(s|sat) + σ_wir*ln(s|wir)
-Xn  = hcat(products.x, products.p_eq_ms, products.ln_within_sat, products.ln_within_wired)
-Zn  = hcat(products.x, products.w,       products.ln_within_sat, products.ln_within_wired)  # instrument price only
-PZn = Zn * inv(Zn'Zn) * Zn'
-β_nl = inv(Xn' * PZn * Xn) * (Xn' * PZn * y)
+# 6) Nested logit 2SLS with instruments
+
+# Build nest-level sums of x by market
+same_nest_x  = similar(products.x, Float64)  # sum of x for the other product in the same nest
+other_nest_x = similar(products.x, Float64)  # sum of x for the two products in the other nest
+
+for t in unique(products.market_id)
+    idx     = findall(products.market_id .== t)
+    satmask = products.satellite[idx] .== 1
+    wirmask = products.wired[idx]     .== 1
+
+    # sums of x in each nest
+    sum_sat = sum(products.x[idx[satmask]])
+    sum_wir = sum(products.x[idx[wirmask]])
+
+    # fill per product
+    for ii in idx
+        if products.satellite[ii] == 1
+            # same nest has 2 prods: exclude self => the other product’s x
+            same_nest_x[ii]  = sum_sat - products.x[ii]
+            other_nest_x[ii] = sum_wir          # both wired products’ x summed
+        else
+            same_nest_x[ii]  = sum_wir - products.x[ii]
+            other_nest_x[ii] = sum_sat
+        end
+    end
+end
+
+# Endogenous regressors
+Xn = hcat(products.x,
+          products.p_eq_ms,
+          products.ln_within_sat,
+          products.ln_within_wired)
+
+# Instruments: exogenous shifters and nest aggregates
+Z_nl = hcat(products.x,
+            products.w,
+            same_nest_x,
+            other_nest_x)
+
+@assert rank(Z_nl) == size(Z_nl, 2) "Z_nl rank deficient. Drop a redundant column (e.g., other_nest_x) or inspect data."
+
+# 2SLS
+Xhat = Z_nl * (Z_nl \ Xn)
+yhat = Z_nl * (Z_nl \ y)
+β_nl = Xhat \ yhat
 β1_nl, α_nl, σ_sat, σ_wir = β_nl
+
 
 open("Assignments/Assignment 3- Demand Estimation/q6_nestedlogit_estimates.tex", "w") do f
     println(f, "\\begin{table}[H]")
@@ -689,45 +738,39 @@ end
 # the true matrix of diversion ratios and the diversion ratios implied by your
 # estimates.
 
-py_elasticities = Array(res_js.compute_elasticities())
-
+E = Array(res_js.compute_elasticities())   # Could be N×N or N×J
 markets = unique(products.market_id)
-J = 4
 own_est = zeros(J)
 D_est   = zeros(J, J)
 
+# Detect shape once
+const is_full = (ndims(E) == 2 && size(E,1) == N && size(E,2) == N)
+const is_block = (ndims(E) == 2 && size(E,1) == N && size(E,2) == J)
+if !(is_full || is_block)
+    error("Unexpected elasticities shape: $(size(E)) (expected N×N or N×J with N=$N, J=$J)")
+end
+
 for t in markets
-    idx = findall(products.market_id .== t)     # row indices for market t in product order 1..J
-    s_t = products.s_obs_ms[idx]                # market t shares (PyBLP matches these at optimum)
-    if ndims(py_elasticities) == 2 && size(py_elasticities, 2) == J
-        # E_t[k,j] is elasticity of s_k wrt p_j in market t
-        E_t = py_elasticities[idx, :]           # J × J
-        # Own-price elasticities: take the diagonal
-        own_est .+= diag(E_t)
-        # Diversion: D_{kj} = (ε_{kj} * s_k) / (-ε_{jj} * s_j)
-        for j in 1:J
-            denom = -E_t[j, j] * s_t[j]
-            if denom == 0.0
-                D_est[:, j] .+= 0.0
-            else
-                D_est[:, j] .+= (E_t[:, j] .* s_t) ./ denom
-                D_est[j, j]  = 0.0
-            end
+    idx = findall(products.market_id .== t)   # length J
+    s_t = products.s_obs_ms[idx]              # length J
+
+    # J×J elasticities for market t
+    E_t = is_full  ? E[idx, idx] : E[idx, :]  # N×N → block; N×J → per-market columns
+
+    own_est .+= diag(E_t)
+    for j in 1:J
+        denom = -E_t[j, j] * s_t[j]
+        if denom != 0.0 && isfinite(denom)
+            D_est[:, j] .+= (E_t[:, j] .* s_t) ./ denom
+            D_est[j, j] = 0.0
         end
-    else
-        # Only own elasticities returned; average those. Diversion requires cross terms and is omitted.
-        own_est .+= py_elasticities[idx]
     end
 end
 
-m = length(markets)
-own_est ./= m
-if sum(D_est) != 0.0
-    D_est ./= m
-    for j in 1:J
-        D_est[j, j] = 0.0
-    end
-end
+
+own_est ./= length(markets)
+D_est   ./= length(markets)
+
 
 outpath = "Assignments/Assignment 3- Demand Estimation/q9_elasticities_diversion.tex"
 open(outpath, "w") do f
@@ -772,38 +815,29 @@ end
 # 11) Suppose firms 1 and 2 are proposing to merge. Use the pyBLP merger simulation procedure to
 # provide a prediction of the post-merger equilibrium prices
 
-# Product-by-firm ownership (N × 4), single-product firms baseline
-OWN_BASE = zeros(Float64, N, 4)
-for j in 1:4
-    OWN_BASE[products.product_id .== j, j] .= 1.0
+# Baseline pre-merger prices
+p_pre_est = vec(Array(res_js.compute_prices()))
+
+# Helper: merge firm b into a in a firm_ids vector
+function merged_ids(base_ids::AbstractVector{Int}, a::Int, b::Int)
+    ids = copy(base_ids)
+    @inbounds for i in eachindex(ids)
+        if ids[i] == b
+            ids[i] = a
+        end
+    end
+    return ids
 end
 
-# Merge products a and b: move ownership of b into a's column
-function ownership_after_merge_map(pair::NTuple{2,Int}, base::AbstractMatrix, product_id::AbstractVector{Int})
-    a, b = pair
-    own = copy(base)
-    rows_b = findall(product_id .== b)
-    own[rows_b, a] .= 1.0
-    own[rows_b, b] .= 0.0
-    own
-end
+firm_ids_base = collect(products.product_id)  # N-vector
 
-# Merger of firms 1 and 2
-own_12 = ownership_after_merge_map((1, 2), OWN_BASE, products.product_id)
+# Merger 1 & 2
+ids_12   = merged_ids(firm_ids_base, 1, 2)
+p_post_12 = vec(Array(res_js.compute_prices(; firm_ids = ids_12)))
 
-
-# Baseline and post-merger prices (no efficiencies)
-p_pre_est  = vec(Array(res_js.compute_prices()))
-p_post_12  = vec(Array(res_js.compute_prices(; ownership=own_12)))
-
-# 13) Now suppose instead that firms 1 and 3 are the ones to merge. Re-run the merger simulation.
-# Provide a table comparing the (average across markets) predicted merger-induced price changes for
-# this merger and that in part 11. Interpret the differences between the predictions for the two mergers.
-
-# Merger of firms 1 and 2
-own_13 = ownership_after_merge_map((1, 3), OWN_BASE, products.product_id)
-p_post_13  = vec(Array(res_js.compute_prices(; ownership=own_13)))
-
+# Merger 1 & 3
+ids_13   = merged_ids(firm_ids_base, 1, 3)
+p_post_13 = vec(Array(res_js.compute_prices(; firm_ids = ids_13)))
 
 # Average by product and differences
 avg_by_product(v) = [mean(v[products.product_id .== j]) for j in 1:4]
@@ -813,8 +847,7 @@ avg_p12     = avg_by_product(p_post_12)
 avg_p13     = avg_by_product(p_post_13)
 avg_dp12    = avg_by_product(p_post_12 .- p_pre_est)
 avg_dp13    = avg_by_product(p_post_13 .- p_pre_est)
-
-avg_diff   = [avg_dp12[j] - avg_dp13[j] for j in 1:4]
+avg_diff    = [avg_dp12[j] - avg_dp13[j] for j in 1:4]
 
 
 open("Assignments/Assignment 3- Demand Estimation/q11_q12_mergers.tex", "w") do f
@@ -883,7 +916,7 @@ for t in 1:T
 end
 
 # Post-merger prices with efficiencies
-p_post_12_eff = vec(Array(res_js.compute_prices(; ownership=own_12, costs=mc_eff)))
+p_post_12_eff = vec(Array(res_js.compute_prices(; firm_ids = ids_12, costs = mc_eff)))
 
 # Average price changes by product
 avg_dp12_eff = [mean((p_post_12_eff .- p_pre_est)[products.product_id .== j]) for j in 1:J]

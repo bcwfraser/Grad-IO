@@ -348,13 +348,14 @@ tend to get this question wrong; recall that I suggested you review Berry
 \toprule
 Parameter & Estimate\\
 \midrule
-Beta on $x$ & 0.621\\
-Alpha on price & -0.509\\
-Sigma (satellite) & 0.680\\
-Sigma (wired) & 0.687\\
+Beta on $x$ & 0.915\\
+Alpha on price & -0.753\\
+Sigma (satellite) & 3.046\\
+Sigma (wired) & -2.649\\
 \bottomrule
 \end{tabular}
 \end{table}
+
 
 The nested logit model is misspecified because it imposes a mechanical pattern of correlation in unobserved utility within the predefined nests rather than modeling true taste heterogeneity. As Berry (1994) notes, the nested logit allows substitution patterns to depend only on group membership and not on continuous characteristics of products or consumers. In the true random coefficients model, substitution depends on how similar products are in characteristics and on heterogeneous consumer tastes. By restricting correlation to fixed nests, the nested logit cannot capture these richer substitution patterns and will therefore misstate cross-price elasticities and substitution across technologies.
 
@@ -383,10 +384,10 @@ diversion ratios implied by your estimates.\footnote{If you get stuck working ou
 \hline
 Product & True & Nested logit est.\\
 \hline
-Good 1 & -5.332 & -3.273\\
-Good 2 & -5.279 & -3.118\\
-Good 3 & -5.240 & -3.162\\
-Good 4 & -5.283 & -3.308\\
+Good 1 & -5.317 & -3.189\\
+Good 2 & -5.262 & -3.046\\
+Good 3 & -5.268 & -3.316\\
+Good 4 & -5.308 & -3.476\\
 \hline
 \end{tabular}
 \end{table}
@@ -398,10 +399,10 @@ Good 4 & -5.283 & -3.308\\
 \hline
 From\\To & 1 & 2 & 3 & 4\\
 \hline
-1 & -1.000 & 0.201 & 0.125 & 0.120\\
-2 & 0.192 & -1.000 & 0.125 & 0.122\\
-3 & 0.120 & 0.127 & -1.000 & 0.195\\
-4 & 0.118 & 0.125 & 0.202 & -1.000\\
+1 & -1.000 & 0.205 & 0.123 & 0.119\\
+2 & 0.196 & -1.000 & 0.123 & 0.120\\
+3 & 0.124 & 0.131 & -1.000 & 0.186\\
+4 & 0.122 & 0.129 & 0.193 & -1.000\\
 \hline
 \end{tabular}
 \end{table}
@@ -413,13 +414,14 @@ From\\To & 1 & 2 & 3 & 4\\
 \hline
 From\\To & 1 & 2 & 3 & 4\\
 \hline
-1 & -1.000 & 0.550 & 0.074 & 0.069\\
-2 & 0.523 & -1.000 & 0.076 & 0.075\\
-3 & 0.072 & 0.076 & -1.000 & 0.530\\
-4 & 0.067 & 0.076 & 0.550 & -1.000\\
+1 & -1.000 & 0.535 & 0.075 & 0.069\\
+2 & 0.510 & -1.000 & 0.077 & 0.075\\
+3 & 0.071 & 0.075 & -1.000 & 0.533\\
+4 & 0.066 & 0.074 & 0.554 & -1.000\\
 \hline
 \end{tabular}
 \end{table}
+
 
 
 % ----------------------------- Correct Model with pyBLP -----------------------------
@@ -443,7 +445,7 @@ and the consumer-specific intercept $\beta_i^{wired}$ is absorbed by the mean in
 
 \vspace{5mm}
 
-Note that this coefficient should have a ``true'' mean of zero and a variance of $\sqrt{2} \approx 1.414$, since under the DGP $\beta_i^{satellite}$ and $\beta_i^{wired}$ were drawn independently from $\mathcal{N}(4,1)$.
+Note that this coefficient should have a ``true'' mean of zero and an SD of $\sqrt{2} \approx 1.414$, since under the DGP $\beta_i^{satellite}$ and $\beta_i^{wired}$ were drawn independently from $\mathcal{N}(4,1)$.
 
 \vspace{5mm}
 
@@ -452,18 +454,20 @@ We need quite a few instruments to get the number of moments above the number of
 
 \begin{table}[H]
 \centering
-\caption{Random coefficients logit estimates}
+\caption{Random-coefficients logit estimates (PyBLP). Entries are estimate (s.e.).}
 \begin{tabular}{lccc}
 \hline
 Parameter & Demand only & Demand+Supply & Optimal IV\\
 \hline
 $\beta_x$ & 0.801 (0.042) & 0.800 (0.042) & 0.781 (0.032)\\
-$\alpha_{price}$ & -1.888 (0.085) & -1.888 (0.086) & -1.875 (0.067)\\
-Mean on satellite & -0.232 (0.202) & -0.228 (0.201) & 0.081 (0.055)\\
-SD on satellite & 1.367 (0.444) & 1.358 (0.443) & 0.444 (0.216)\\
+$\alpha_{price}$ & -1.889 (0.085) & -1.889 (0.085) & -1.874 (0.067)\\
+Mean on satellite & -0.234 (0.202) & -0.234 (0.201) & 0.079 (0.055)\\
+SD on satellite & 1.372 (0.443) & 1.370 (0.443) & 0.455 (0.212)\\
 \hline
 \end{tabular}
 \end{table}
+
+
 
 The smaller estimated standard deviation in the optimal IV spec could reflect collinearity among the generated optimal instruments, since the optimal-IV step produces instrument functions that are nearly linear combinations of existing ones. The weighting matrix then down weights the moments that help identify the dispersion and pulls $\hat{\sigma}$ toward smaller values.
 
@@ -489,34 +493,29 @@ I chose the demand+supply spec above, given the potential collinearity issue wit
 Product & True & Estimated\\
 \hline
 $1$ & -5.317 & -4.801\\
-$2$ & -5.262 & -4.735\\
-$3$ & -5.268 & -5.149\\
-$4$ & -5.308 & -5.173\\
+$2$ & -5.262 & -4.734\\
+$3$ & -5.268 & -5.153\\
+$4$ & -5.308 & -5.177\\
 \hline\end{tabular}\end{table}
 
-\begin{table}[H]
-\centering
+\begin{table}[H]\centering
 \caption{Average diversion ratios across markets (true).}
-\begin{tabular}{lcccc}
-\hline
-From\\To & 1 & 2 & 3 & 4\\
-\hline
-1 & -1.000 & 0.201 & 0.125 & 0.120\\
-2 & 0.192 & -1.000 & 0.125 & 0.122\\
-3 & 0.120 & 0.127 & -1.000 & 0.195\\
-4 & 0.118 & 0.125 & 0.202 & -1.000\\
-\hline
-\end{tabular}
-\end{table}
+\begin{tabular}{lcccc}\hline From\\To & 1 & 2 & 3 & 4\\\hline
+1 & -1.000 & 0.205 & 0.123 & 0.119\\
+2 & 0.196 & -1.000 & 0.123 & 0.120\\
+3 & 0.124 & 0.131 & -1.000 & 0.186\\
+4 & 0.122 & 0.129 & 0.193 & -1.000\\
+\hline\end{tabular}\end{table}
 
 \begin{table}[H]\centering
 \caption{Average diversion ratios across markets (estimated).}
 \begin{tabular}{lcccc}\hline From\\To & 1 & 2 & 3 & 4\\\hline
-1 & -1.000 & 0.259 & 0.130 & 0.125\\
-2 & 0.248 & -1.000 & 0.131 & 0.127\\
+1 & -1.000 & 0.261 & 0.130 & 0.125\\
+2 & 0.249 & -1.000 & 0.131 & 0.127\\
 3 & 0.114 & 0.120 & -1.000 & 0.151\\
-4 & 0.113 & 0.119 & 0.155 & -1.000\\
+4 & 0.112 & 0.119 & 0.155 & -1.000\\
 \hline\end{tabular}\end{table}
+
 
 % ----------------------------- Merger Simulation -----------------------------
 \section*{Merger Simulation}
@@ -550,10 +549,10 @@ two mergers.
 \caption{Average post-merger prices by product: merger of firms 1 \& 2}
 \begin{tabular}{lcc}
 \hline Product & Pre-merger & Post-merger \\ \hline
-$1$ & 3.177 & 3.316 \\
-$2$ & 3.182 & 3.001 \\
-$3$ & 3.154 & 3.152 \\
-$4$ & 3.150 & 3.148 \\
+$1$ & 3.177 & 3.387 \\
+$2$ & 3.182 & 3.379 \\
+$3$ & 3.154 & 3.156 \\
+$4$ & 3.150 & 3.152 \\
 \hline\end{tabular}\end{table}
 
 \begin{table}[H]
@@ -561,10 +560,10 @@ $4$ & 3.150 & 3.148 \\
 \caption{Average post-merger prices by product: merger of firms 1 \& 3}
 \begin{tabular}{lcc}
 \hline Product & Pre-merger & Post-merger \\ \hline
-$1$ & 3.177 & 3.246 \\
-$2$ & 3.182 & 3.182 \\
-$3$ & 3.154 & 3.056 \\
-$4$ & 3.150 & 3.148 \\
+$1$ & 3.177 & 3.256 \\
+$2$ & 3.182 & 3.186 \\
+$3$ & 3.154 & 3.237 \\
+$4$ & 3.150 & 3.151 \\
 \hline\end{tabular}\end{table}
 
 \begin{table}[H]
@@ -572,14 +571,14 @@ $4$ & 3.150 & 3.148 \\
 \caption{Average price changes (post $-$ pre) by product and difference}
 \begin{tabular}{lccc}
 \hline Product & Merger 1--2 & Merger 1--3 & Difference \\ \hline
-$1$ & 0.138 & 0.069 & 0.069 \\
-$2$ & -0.180 & 0.000 & -0.180 \\
-$3$ & -0.002 & -0.098 & 0.096 \\
-$4$ & -0.002 & -0.002 & -0.000 \\
+$1$ & 0.210 & 0.078 & 0.132 \\
+$2$ & 0.198 & 0.005 & 0.193 \\
+$3$ & 0.002 & 0.083 & -0.081 \\
+$4$ & 0.002 & 0.001 & 0.001 \\
 \hline\end{tabular}\end{table}
 
 
-Since 1 and 2 are closer substitutes (as satellite services), the price effects are stronger for good 1 when it merges with 2, as compared to when it merges with 3. It's not immediately obvious why there is a negative price effect for products 2 and 3 under the mergers, but perhaps they happen to have higher simulated marginal costs than 1 or much smaller initial shares (they raise the price of 1 to extract surplus from price inelastic consumers of 1 but reduce the price of 2 to ensure the diverted more elastic customers go to 2). This is possible because of the nonlinearity of the price system.
+Since 1 and 2 are closer substitutes (as satellite services), the price effects are stronger for good 1 when it merges with 2, as compared to when it merges with 3. It's not immediately obvious why there is a negative price effect for product 3 under the mergers, but perhaps they happen to have higher simulated marginal costs than 1 or much smaller initial shares (they raise the price of 1 to extract surplus from price inelastic consumers of 1 but reduce the price of 3 to ensure the diverted more elastic customers go to 3). This is possible because of the nonlinearity of the price system.
 
 
 \begin{tcolorbox}
@@ -611,19 +610,21 @@ M_{t} $ is the same in each market  $t$?
 \caption{Merger 1--2 with 15\% cost reduction: average price changes by product}
 \begin{tabular}{lc}
 \hline Product & $\Delta p$ \\ \hline
-$1$ & -0.171 \\
-$2$ & -0.551 \\
-$3$ & -0.010 \\
-$4$ & -0.009 \\
+$1$ & -0.060 \\
+$2$ & -0.071 \\
+$3$ & -0.003 \\
+$4$ & -0.003 \\
 \hline\end{tabular}\end{table}
+
 
 
 \begin{table}[H]
 \centering
 \caption{Average change in consumer surplus (per consumer)}
 \begin{tabular}{lc}
-\hline $\Delta CS$ & 0.182 \\ \hline
+\hline $\Delta CS$ & 0.033 \\ \hline
 \end{tabular}\end{table}
+
 
 
 \begin{tcolorbox}
