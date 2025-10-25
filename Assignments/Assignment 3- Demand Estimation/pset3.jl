@@ -315,25 +315,30 @@ for t in unique(products.market_id)
     products.ln_within_wired[idx[wirmask]] .= log.(s[wirmask]) .- log(S_wir)
 end
 
-# OLS: y = β*x + α*p
+# OLS: y = βx + β_sat*satellite + αp  (no intercept in Berry transform)
 y  = products.y_berry
-Xo = hcat(products.x, products.p_eq_ms)           # no intercept in Berry transform
+Xo = hcat(products.x, products.satellite, products.p_eq_ms)
 β_ols = Xo \ y
-β1_ols, α_ols = β_ols[1], β_ols[2]
+β1_ols   = β_ols[1]   # coefficient on x
+βsat_ols = β_ols[2]   # coefficient on satellite dummy (wired is baseline)
+α_ols    = β_ols[3]   # coefficient on price
 
-# 5) 2SLS: instrument price with {x, w}
-X  = hcat(products.x, products.p_eq_ms) # structural regressors
-Z  = hcat(products.x, products.w) # characteristic doesn't enter supply so instruments itself. w is excluded cost shifter
+# 5)
+# 2SLS: instrument price with {x, w}; include all exogenous regressors in Z
+X  = hcat(products.x, products.satellite, products.p_eq_ms)
+Z  = hcat(products.x, products.satellite, products.w)
 PZ = Z * inv(Z'Z) * Z'
 β_iv = inv(X' * PZ * X) * (X' * PZ * y)
-β1_iv, α_iv = β_iv[1], β_iv[2]
+β1_iv   = β_iv[1]      # coefficient on x
+βsat_iv = β_iv[2]      # coefficient on satellite dummy
+α_iv    = β_iv[3]      # coefficient on price
 
 # Comparison table
 estimates = DataFrame(
-    Parameter = ["β on x", "α on price"],
-    OLS       = [β1_ols,   α_ols],
-    TSLS      = [β1_iv,    α_iv],
-    True      = [β1,       α]
+    Parameter = ["β on x", "β on satellite", "α on price"],
+    OLS = [β1_ols, βsat_ols, α_ols],
+    TSLS = [β1_iv, βsat_iv, α_iv],
+    True = [β1, 0, α]
 )
 
 # round for display
@@ -343,20 +348,23 @@ estimates.TSLS = round.(estimates.TSLS, digits=3)
 println(estimates)
 
 # write LaTeX table for comparison
+# write LaTeX table for comparison
 open("Assignments/Assignment 3- Demand Estimation/q4_5_estimates.tex", "w") do f
     println(f, "\\begin{table}[H]")
     println(f, "\\centering")
-    println(f, "\\caption{Plain logit estimates: OLS vs 2SLS (instrumenting price with \$x\$ and \$w\$).}")
+    println(f, "\\caption{Plain logit estimates: OLS vs 2SLS (instrumenting price with x and w).}")
     println(f, "\\begin{tabular}{lccc}")
     println(f, "\\toprule")
     println(f, "Parameter & OLS & 2SLS & True\\\\")
     println(f, "\\midrule")
-    println(f, "Beta on \$x\$ & $(round(β1_ols, digits=3)) & $(round(β1_iv, digits=3)) & $(round(β1, digits=3))\\\\")
+    println(f, "Beta on x & $(round(β1_ols, digits=3)) & $(round(β1_iv, digits=3)) & $(round(β1, digits=3))\\\\")
+    println(f, "Beta on satellite & $(round(βsat_ols, digits=3)) & $(round(βsat_iv, digits=3)) & --\\\\")
     println(f, "Alpha on price & $(round(α_ols, digits=3)) & $(round(α_iv, digits=3)) & $(round(α, digits=3))\\\\")
     println(f, "\\bottomrule")
     println(f, "\\end{tabular}")
     println(f, "\\end{table}")
 end
+
 
 
 # 6) Nested logit 2SLS: y = β*x + α*p + σ_sat*ln(s|sat) + σ_wir*ln(s|wir)
