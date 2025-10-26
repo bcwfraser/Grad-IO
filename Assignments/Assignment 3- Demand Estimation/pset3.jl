@@ -7,7 +7,7 @@ Random.seed!(1999)
 
 # 1. Generate the data
 
-T = 600 # number of markets
+T = 600 # number of markets 
 J = 4 # four inside goods per market
 N = T * J # total product-market observations
 
@@ -410,9 +410,9 @@ Xn = hcat(products.x,
 
 # Instruments: exogenous shifters and nest aggregates
 Z_nl = hcat(products.x,
-            products.w,
-            same_nest_x,
-            other_nest_x)
+            products.ln_within_sat,
+            products.ln_within_wired,
+            products.w)
 
 @assert rank(Z_nl) == size(Z_nl, 2) "Z_nl rank deficient. Drop a redundant column (e.g., other_nest_x) or inspect data."
 
@@ -445,36 +445,55 @@ end
 
 # Nested logit shares with group-specific σ
 function nested_logit_shares(p, x, sat, wired, α̂, β̂, σ_sat, σ_wir)
-    v = β̂ .* x .+ α̂ .* p
-    idx_sat = findall(sat .== 1); idx_wir = findall(wired .== 1)
     s = zeros(length(p))
+    idx_sat = findall(sat .== 1)
+    idx_wir = findall(wired .== 1)
+
     if !isempty(idx_sat)
-        den_sat = sum(exp.(v[idx_sat] ./ (1 - σ_sat)))
-        s_cond_sat = exp.(v[idx_sat] ./ (1 - σ_sat)) ./ den_sat
-        IV_sat = den_sat^(1 - σ_sat)
-        # wired placeholder; compute below before S_g
-        if !isempty(idx_wir)
-            den_wir = sum(exp.(v[idx_wir] ./ (1 - σ_wir)))
-            IV_wir = den_wir^(1 - σ_wir)
-            denom = 1 + IV_sat + IV_wir
-            S_sat = IV_sat / denom; S_wir = IV_wir / denom
-            s[idx_sat] = s_cond_sat .* S_sat
-            s[idx_wir] = (exp.(v[idx_wir] ./ (1 - σ_wir)) ./ den_wir) .* S_wir
-        else
-            denom = 1 + IV_sat
-            S_sat = IV_sat / denom
-            s[idx_sat] = s_cond_sat .* S_sat
-        end
+        θs = 1.0 - σ_sat
+        @assert θs > 0.0 "Nested-logit requires σ_sat < 1."
+        z_sat = (β̂ .* x[idx_sat] .+ α̂ .* p[idx_sat]) ./ θs
+        a_sat = maximum(z_sat)
+        den_sat = sum(exp.(z_sat .- a_sat))
+        s_cond_sat = exp.(z_sat .- a_sat) ./ den_sat
+        log_IV_sat = θs * (a_sat + log(den_sat))
+        IV_sat = exp(log_IV_sat)
     else
-        # only wired group present
-        den_wir = sum(exp.(v[idx_wir] ./ (1 - σ_wir)))
-        IV_wir = den_wir^(1 - σ_wir)
-        denom = 1 + IV_wir
-        S_wir = IV_wir / denom
-        s[idx_wir] = (exp.(v[idx_wir] ./ (1 - σ_wir)) ./ den_wir) .* S_wir
+        IV_sat = 0.0
     end
+
+    if !isempty(idx_wir)
+        θw = 1.0 - σ_wir
+        @assert θw > 0.0 "Nested-logit requires σ_wir < 1."
+        z_wir = (β̂ .* x[idx_wir] .+ α̂ .* p[idx_wir]) ./ θw
+        a_wir = maximum(z_wir)
+        den_wir = sum(exp.(z_wir .- a_wir))
+        s_cond_wir = exp.(z_wir .- a_wir) ./ den_wir
+        log_IV_wir = θw * (a_wir + log(den_wir))
+        IV_wir = exp(log_IV_wir)
+    else
+        IV_wir = 0.0
+    end
+
+    if !isempty(idx_sat) && !isempty(idx_wir)
+        denom = 1.0 + IV_sat + IV_wir
+        S_sat = IV_sat / denom
+        S_wir = IV_wir / denom
+        s[idx_sat] .= s_cond_sat .* S_sat
+        s[idx_wir] .= s_cond_wir .* S_wir
+    elseif !isempty(idx_sat)
+        denom = 1.0 + IV_sat
+        S_sat = IV_sat / denom
+        s[idx_sat] .= s_cond_sat .* S_sat
+    elseif !isempty(idx_wir)
+        denom = 1.0 + IV_wir
+        S_wir = IV_wir / denom
+        s[idx_wir] .= s_cond_wir .* S_wir
+    end
+
     return s
 end
+
 
 markets = unique(products.market_id)
 J = 4
@@ -504,17 +523,24 @@ for t in markets
     end
 
     s_hat = nested_logit_shares(p, x, sat, wir, α_nl, β1_nl, σ_sat, σ_wir)
-    Jhat = zeros(J,J)
+        Jhat = zeros(J,J)
     for j in 1:J
-        pb = copy(p); pb[j] += h
+        # Adaptive step to improve stability across price scales
+        hj = max(1e-4, 1e-4 * abs(p[j]))
+        pb = copy(p); pb[j] += hj
         s2 = nested_logit_shares(pb, x, sat, wir, α_nl, β1_nl, σ_sat, σ_wir)
-        Jhat[:, j] = (s2 .- s_hat) ./ h
+        Jhat[:, j] = (s2 .- s_hat) ./ hj
     end
-    own_hat .+= diag(Jhat) .* (p ./ s_hat)
+
+    # Guard against zero shares in elasticity scaling
+    s_hat_safe = max.(s_hat, 1e-12)
+    own_hat .+= diag(Jhat) .* (p ./ s_hat_safe)
+
     for j in 1:J
         denom = -Jhat[j,j]
-        if denom != 0.0
+        if isfinite(denom) && abs(denom) > 0.0
             D_hat[:, j] .+= Jhat[:, j] ./ denom
+            D_hat[j, j] = 0.0
         end
     end
 end
@@ -660,7 +686,7 @@ sigma0 = np.array([[0.5]])
 problem_d = pyblp.Problem((X1, X2), product_data, integration=integ, add_exogenous=false)
 res_d = problem_d.solve(sigma=sigma0, method="2s", optimization=pyblp.Optimization("l-bfgs-b"))
 
-# Joint demand + supply (log costs), initialized at demand-only estimates
+# Joint demand + supply (log costs), initialised at demand-only estimates
 beta0  = Array(res_d.beta)
 sigma0 = Array(res_d.sigma)
 problem_js = pyblp.Problem((X1, X2, X3), product_data, integration=integ, costs_type="log", add_exogenous=false)
@@ -731,7 +757,6 @@ open("Assignments/Assignment 3- Demand Estimation/q8_pyblp_estimates.tex", "w") 
     println(f, "\\end{tabular}")
     println(f, "\\end{table}")
 end
-
 # 9. Using your preferred estimates from the prior step (explain your
 # preference), provide a table comparing the estimated own-price elasticities
 # to the true own-price elasticities. Provide two additional tables showing
