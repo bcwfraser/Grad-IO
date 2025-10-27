@@ -637,7 +637,17 @@ this point it was without loss to assume $M_{t}=1$. What is the predicted
 impact of the merger on total welfare?
 \end{tcolorbox}
 
-Up to now, normalising $M_t=1$ was without loss for estimation and price/comparison tables because everything scaled out. Consumer surplus and producer surplus scale linearly with $M_t$: $CS_t = M_t \cdot cs_t$ and $\Pi_t = M_t \cdot \sum_j (p_{jt}-mc_{jt}) s_{jt}$. To aggregate welfare levels across markets, we need the actual $M_t$. Total welfare change equals the change in consumer surplus plus the change in producer surplus; both require $M_t$ for impacts in levels.
+Up to this point, we normalised the market size to $M_t = 1$ without loss of generality because we were comparing objects like market shares, elasticities, or percentage price changes. These are all {per-consumer} or {per-market} objects, so scaling the total number of consumers did not affect any of the qualitative conclusions.
+
+However, when we move to {consumer surplus in levels} and then to {total welfare}, the absolute scale of the market matters. A \$1 improvement in surplus per consumer implies a very different total welfare effect in a market with $M_t = 10{,}000$ consumers than in a market with $M_t = 100$ consumers. For this reason, to compute total consumer welfare we must multiply $CS_t$ by $M_t$:
+\[
+\text{Total Consumer Welfare}_t = M_t \cdot CS_t.
+\]
+
+This is why, at this stage, we either (i) assume that $M_t$ is the same across all markets $t$, or (ii) use data on the actual $M_t$ in each market and compute the total as a weighted average. Without that, we cannot convert per consumer surplus changes into dollar valued total welfare changes.
+
+
+
 
 \section*{Coding Tips}
 \begin{tcolorbox}
