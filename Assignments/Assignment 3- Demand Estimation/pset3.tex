@@ -279,7 +279,7 @@ See Julia code. Example plot using these shares (aggregating the goods by their 
 
 \paragraph{4.} Let $y_{jt}=\ln s_{jt}-\ln s_{0t}$. (i.e. the Berry inversion) The plain logit implies
 \[
-y_{jt}= \beta x_{jt} + \alpha p_{jt} + \xi_{jt},
+y_{jt}= \beta x_{jt} + \beta_{sat}Satellite_{jt} +  \alpha p_{jt} + \xi_{jt},
 \]
 which we estimate by OLS, ignoring the endogeneity of $p_{jt}$.
 
@@ -293,7 +293,7 @@ obtained by OLS.
 \textbf{5.} Let the first stage be $p_{jt}=\pi_0+\pi_1 x_{jt}+\pi_2 w_{jt}+u_{jt}$.
 The 2SLS second stage is
 \[
-y_{jt}= \beta x_{jt} + \alpha \hat p_{jt} + \varepsilon_{jt},
+y_{jt}= \beta x_{jt} + \beta_{sat}Satellite_{jt} + \alpha \hat p_{jt} + \varepsilon_{jt},
 \]
 instrumenting price with $\{x_{jt},w_{jt}\}$.
 
